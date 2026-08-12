@@ -1,40 +1,37 @@
 #!/bin/bash
+# ==============================================================================
+# Script de Configuración Avanzada para Debian Home Server
+# ==============================================================================
 
 set -e
 
+# Asegurar que el script se ejecuta como root
 if [ "$EUID" -ne 0 ]; then
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "Error: No eres root y el comando 'sudo' no está instalado."
-        echo "Por favor, inicia sesión como root (escribe 'su -' e ingresa tu contraseña) y vuelve a ejecutar el script."
-        exit 1
-    fi
-    CMD_SUDO="sudo"
-else
-    CMD_SUDO=""
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "=== 'sudo' no detectado. Instalando y configurando ==="
-        apt-get update
-        apt-get install -y sudo
+    echo "Error: Por favor, ejecuta este script como root (escribe 'su -' para cambiar a root)."
+    exit 1
+fi
 
-        echo "------------------------------------------------------"
-        echo "Usuarios normales detectados en el sistema:"
-        ls -1 /home 2>/dev/null || echo "(Ningún usuario normal detectado en /home)"
-        echo "------------------------------------------------------"
-        read -p "¿A qué usuario deseas darle permisos de sudo? (Escribe el nombre o deja en blanco para omitir): " NUEVO_ADMIN
+echo "=== 0. Instalando 'sudo' y configurando administradores ==="
+apt-get update
+apt-get install -y sudo
 
-        if [ -n "$NUEVO_ADMIN" ]; then
-            if id "$NUEVO_ADMIN" >/dev/null 2>&1; then
-                usermod -aG sudo "$NUEVO_ADMIN"
-                echo "Usuario '$NUEVO_ADMIN' agregado al grupo 'sudo' exitosamente."
-                echo "   (El usuario deberá cerrar sesión y volver a entrar para que los permisos apliquen)."
-                sleep 2
-            else
-                echo "El usuario '$NUEVO_ADMIN' no existe en el sistema. Continuando sin asignar sudo."
-                sleep 2
-            fi
-        fi
+echo "------------------------------------------------------"
+echo "Usuarios normales detectados en el sistema:"
+ls -1 /home 2>/dev/null || echo "(Ningún usuario normal detectado en /home)"
+echo "------------------------------------------------------"
+read -p "¿A qué usuario deseas darle permisos de sudo? (Escribe el nombre o deja en blanco para omitir): " NUEVO_ADMIN
+
+if [ -n "$NUEVO_ADMIN" ]; then
+    if id "$NUEVO_ADMIN" >/dev/null 2>&1; then
+        usermod -aG sudo "$NUEVO_ADMIN"
+        echo "Usuario '$NUEVO_ADMIN' agregado al grupo 'sudo' exitosamente."
+        echo "   (El usuario deberá cerrar sesión y volver a entrar para que los permisos apliquen)."
+    else
+        echo "El usuario '$NUEVO_ADMIN' no existe en el sistema. Continuando sin asignar sudo."
     fi
 fi
+echo ""
+sleep 2
 
 BASE_DIR="/opt/homeserver"
 MDNS_NAME="$(hostname).local"
@@ -45,36 +42,74 @@ if [ ! -f "./docker-compose.yml" ]; then
     echo "Por favor, ejecuta este script desde la raíz del repositorio clonado."
     exit 1
 fi
+echo "Archivo docker-compose.yml encontrado."
+echo ""
+sleep 2
 
 echo "=== 1. Optimizando repositorios (Buscando el mejor espejo para tu conexión) ==="
-$CMD_SUDO apt-get update
-$CMD_SUDO apt-get install -y netselect-apt wget
-
+apt-get install -y netselect-apt wget
 source /etc/os-release
 
 cd /tmp
-echo "Analizando latencia de los servidores de Debian ($VERSION_CODENAME)"
-$CMD_SUDO netselect-apt -n $VERSION_CODENAME || true
+echo "Analizando latencia de los servidores de Debian ($VERSION_CODENAME)..."
+netselect-apt -n $VERSION_CODENAME || true
 
 if [ -f /tmp/sources.list ]; then
-    echo "Aplicando cambios..."
-    $CMD_SUDO cp /etc/apt/sources.list /etc/apt/sources.list.backup
-    $CMD_SUDO mv /tmp/sources.list /etc/apt/sources.list
-    $CMD_SUDO apt-get update
+    echo "Aplicando cambios al repositorio..."
+    cp /etc/apt/sources.list /etc/apt/sources.list.backup
+    mv /tmp/sources.list /etc/apt/sources.list
+    apt-get update
 else
     echo "Advertencia: No se pudo optimizar el repositorio. Se continuará con el predeterminado."
 fi
 cd - > /dev/null
+echo ""
+sleep 2
 
 echo "=== 2. Instalando dependencias del sistema ==="
-$CMD_SUDO apt-get install -y fail2ban borgbackup ufw avahi-daemon
+apt-get install -y fail2ban borgbackup ufw avahi-daemon
+echo ""
+sleep 2
 
-echo "=== 3. Configurando red mDNS ==="
-$CMD_SUDO systemctl enable --now avahi-daemon
+echo "=== 3. Instalando Docker Oficial ==="
+# Eliminar versiones antiguas o conflictivas
+apt-get remove -y docker.io docker-compose docker-doc docker-buildx podman-docker containerd runc || true
+
+# Agregar clave GPG oficial de Docker
+apt-get update
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+# Agregar el repositorio a las fuentes de Apt
+tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+apt-get update
+# Instalar los paquetes reales de Docker
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Iniciar y habilitar el servicio de Docker
+systemctl enable --now docker
+systemctl status docker --no-pager | head -n 5
+echo ""
+sleep 2
+
+echo "=== 4. Configurando red mDNS ==="
+systemctl enable --now avahi-daemon
 echo "El servidor estará accesible en tu red local como: ${MDNS_NAME}"
+echo ""
+sleep 2
 
-echo "=== 4. Configurando Fail2ban para proteger SSH ==="
-cat << 'EOF' | $CMD_SUDO tee /etc/fail2ban/jail.local > /dev/null
+echo "=== 5. Configurando Fail2ban para proteger SSH ==="
+cat << 'EOF' | tee /etc/fail2ban/jail.local > /dev/null
 [sshd]
 enabled = true
 port = ssh
@@ -84,28 +119,36 @@ maxretry = 5
 bantime = 1h
 findtime = 10m
 EOF
-$CMD_SUDO systemctl restart fail2ban
+systemctl restart fail2ban
+echo ""
+sleep 2
 
-echo "=== 5. Creando estructura de directorios y volúmenes en $BASE_DIR ==="
-$CMD_SUDO mkdir -p ${BASE_DIR}/prometheus/data
-$CMD_SUDO mkdir -p ${BASE_DIR}/grafana/data
-$CMD_SUDO mkdir -p ${BASE_DIR}/homepage/config
-$CMD_SUDO mkdir -p ${BASE_DIR}/jellyfin/config ${BASE_DIR}/jellyfin/cache ${BASE_DIR}/jellyfin/media
-$CMD_SUDO mkdir -p ${BASE_DIR}/nextcloud/app ${BASE_DIR}/nextcloud/db
-$CMD_SUDO mkdir -p ${BASE_DIR}/pihole/etc-pihole ${BASE_DIR}/pihole/etc-dnsmasq.d
-$CMD_SUDO mkdir -p ${BASE_DIR}/tailscale/state
-$CMD_SUDO mkdir -p ${BASE_DIR}/portainer/data
-$CMD_SUDO mkdir -p ${BASE_DIR}/borgbackup/repo ${BASE_DIR}/borgbackup/cache
+echo "=== 6. Creando estructura de directorios y volúmenes en $BASE_DIR ==="
+mkdir -p ${BASE_DIR}/prometheus/data
+mkdir -p ${BASE_DIR}/grafana/data
+mkdir -p ${BASE_DIR}/homepage/config
+mkdir -p ${BASE_DIR}/jellyfin/config ${BASE_DIR}/jellyfin/cache ${BASE_DIR}/jellyfin/media
+mkdir -p ${BASE_DIR}/nextcloud/app ${BASE_DIR}/nextcloud/db
+mkdir -p ${BASE_DIR}/pihole/etc-pihole ${BASE_DIR}/pihole/etc-dnsmasq.d
+mkdir -p ${BASE_DIR}/tailscale/state
+mkdir -p ${BASE_DIR}/portainer/data
+mkdir -p ${BASE_DIR}/borgbackup/repo ${BASE_DIR}/borgbackup/cache
+echo ""
+sleep 2
 
-echo "=== 6. Copiando el archivo docker-compose.yml a la ruta del servidor ==="
-$CMD_SUDO cp ./docker-compose.yml ${BASE_DIR}/docker-compose.yml
+echo "=== 7. Copiando el archivo docker-compose.yml a la ruta del servidor ==="
+cp ./docker-compose.yml ${BASE_DIR}/docker-compose.yml
+echo ""
+sleep 2
 
-echo "=== 7. Asignando permisos de almacenamiento a bases de datos ==="
-$CMD_SUDO chown -R 65534:65534 ${BASE_DIR}/prometheus
-$CMD_SUDO chown -R 472:472 ${BASE_DIR}/grafana
+echo "=== 8. Asignando permisos de almacenamiento a bases de datos ==="
+chown -R 65534:65534 ${BASE_DIR}/prometheus
+chown -R 472:472 ${BASE_DIR}/grafana
+echo ""
+sleep 2
 
-echo "=== 8. Creando archivo de configuración prometheus.yml ==="
-cat << 'EOF' | $CMD_SUDO tee ${BASE_DIR}/prometheus/prometheus.yml > /dev/null
+echo "=== 9. Creando archivo de configuración prometheus.yml ==="
+cat << 'EOF' | tee ${BASE_DIR}/prometheus/prometheus.yml > /dev/null
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -119,9 +162,11 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 EOF
+echo ""
+sleep 2
 
-echo "=== 9. Configurando Homepage (Paneles y Accesos Directos) ==="
-cat << EOF | $CMD_SUDO tee ${BASE_DIR}/homepage/config/services.yaml > /dev/null
+echo "=== 10. Configurando Homepage (Paneles y Accesos Directos) ==="
+cat << EOF | tee ${BASE_DIR}/homepage/config/services.yaml > /dev/null
 - Dashboard & Monitoreo:
     - Grafana:
         icon: grafana.png
@@ -152,9 +197,11 @@ cat << EOF | $CMD_SUDO tee ${BASE_DIR}/homepage/config/services.yaml > /dev/null
         href: http://${MDNS_NAME}:8080
         description: Nube privada de archivos
 EOF
+echo ""
+sleep 2
 
-echo "=== 10. Configurando Cron Job para BorgBackup (Copias Diarias a las 3:00 AM) ==="
-cat << 'EOF' | $CMD_SUDO tee /etc/cron.daily/borg-homeserver > /dev/null
+echo "=== 11. Configurando Cron Job para BorgBackup (Copias Diarias a las 3:00 AM) ==="
+cat << 'EOF' | tee /etc/cron.daily/borg-homeserver > /dev/null
 #!/bin/bash
 # Inicializar repositorio Borg si no existe
 if [ ! -d "/opt/homeserver/borgbackup/repo/data" ]; then
@@ -170,25 +217,34 @@ borg create /opt/homeserver/borgbackup/repo::'backup-{now:%Y-%m-%d-%H%M}' /opt/h
 # Mantener los últimos 7 respaldos diarios, 4 semanales y 6 mensuales
 borg prune -v --list /opt/homeserver/borgbackup/repo --keep-daily=7 --keep-weekly=4 --keep-monthly=6
 EOF
-$CMD_SUDO chmod +x /etc/cron.daily/borg-homeserver
+chmod +x /etc/cron.daily/borg-homeserver
+echo ""
+sleep 2
 
-echo "=== 11. Configurando Firewall (UFW) ==="
-$CMD_SUDO ufw allow 22/tcp     # SSH
-$CMD_SUDO ufw allow 3000/tcp   # Homepage
-$CMD_SUDO ufw allow 3001/tcp   # Grafana
-$CMD_SUDO ufw allow 8080/tcp   # Nextcloud
-$CMD_SUDO ufw allow 8081/tcp   # Pi-hole Web Admin
-$CMD_SUDO ufw allow 8096/tcp   # Jellyfin
-$CMD_SUDO ufw allow 9090/tcp   # Prometheus
-$CMD_SUDO ufw allow 9443/tcp   # Portainer HTTPS
-$CMD_SUDO ufw allow 53/tcp     # DNS Pi-hole
-$CMD_SUDO ufw allow 53/udp     # DNS Pi-hole
-$CMD_SUDO ufw allow 41641/udp  # Tailscale
-$CMD_SUDO ufw --force enable
+echo "=== 12. Configurando Firewall (UFW) ==="
+ufw allow 22/tcp     # SSH
+ufw allow 3000/tcp   # Homepage
+ufw allow 3001/tcp   # Grafana
+ufw allow 8080/tcp   # Nextcloud
+ufw allow 8081/tcp   # Pi-hole Web Admin
+ufw allow 8096/tcp   # Jellyfin
+ufw allow 9090/tcp   # Prometheus
+ufw allow 9443/tcp   # Portainer HTTPS
+ufw allow 53/tcp     # DNS Pi-hole
+ufw allow 53/udp     # DNS Pi-hole
+ufw allow 41641/udp  # Tailscale
+# Habilitar UFW sin interrupciones
+ufw --force enable
+echo ""
+sleep 2
 
-echo "=== ¡Despliegue Avanzado Completado! ==="
+echo "========================================================="
+echo "=== ¡Despliegue Completado con Éxito! ==="
+echo "========================================================="
+echo ""
 echo "Para iniciar la infraestructura de contenedores ejecuta:"
-echo "  cd ${BASE_DIR} && $CMD_SUDO docker compose up -d"
+echo "  cd ${BASE_DIR} && docker compose up -d"
 echo ""
 echo "Podrás acceder a tu panel principal desde cualquier dispositivo en la red en:"
 echo "  http://${MDNS_NAME}:3000"
+echo ""
