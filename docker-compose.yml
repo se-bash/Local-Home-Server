@@ -2,10 +2,10 @@ version: '3.8'
 
 services:
   # ----------------------------------------------------------------------------
-  # SEGURIDAD Y PROTECCIÓN DE SOCKET
+  # SEGURIDAD Y PROTECCIÓN DE SOCKET (AISLAMIENTO DOCKER)
   # ----------------------------------------------------------------------------
   docker-socket-proxy:
-    image: wollaby/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy:latest
     container_name: docker-socket-proxy
     restart: unless-stopped
     environment:
@@ -105,34 +105,14 @@ services:
       - ./jellyfin/cache:/cache
       - ./jellyfin/media:/media
 
-  nextcloud-db:
-    image: mariadb:10.11
-    container_name: nextcloud-db
-    restart: unless-stopped
-    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
-    volumes:
-      - ./nextcloud/db:/var/lib/mysql
-    environment:
-      - MYSQL_ROOT_PASSWORD=cambiar_password_root
-      - MYSQL_PASSWORD=cambiar_password_user
-      - MYSQL_DATABASE=nextcloud
-      - MYSQL_USER=nextcloud
-
   nextcloud:
     image: nextcloud:latest
     container_name: nextcloud
     restart: unless-stopped
     ports:
       - "8080:80"
-    depends_on:
-      - nextcloud-db
     volumes:
       - ./nextcloud/app:/var/www/html
-    environment:
-      - MYSQL_HOST=nextcloud-db
-      - MYSQL_DATABASE=nextcloud
-      - MYSQL_USER=nextcloud
-      - MYSQL_PASSWORD=cambiar_password_user
 
   # ----------------------------------------------------------------------------
   # RED, VPN Y BLOQUEO DE PUBLICIDAD
