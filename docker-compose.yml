@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # SEGURIDAD Y PROTECCIÓN DE SOCKET
+  # ----------------------------------------------------------------------------
+  docker-socket-proxy:
+    image: wollaby/docker-socket-proxy:latest
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - SERVICES=1
+      - TASKS=1
+      - NETWORKS=1
+      - NODES=1
+      - INFO=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # ----------------------------------------------------------------------------
+  # GESTIÓN Y ACTUALIZACIONES AUTOMÁTICAS
+  # ----------------------------------------------------------------------------
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "9443:9443"
+    volumes:
+      - ./portainer/data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * * # Actualiza automáticamente a las 4:00 AM
+
+  # ----------------------------------------------------------------------------
+  # MONITOREO Y TELEMETRÍA
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+
+  # ----------------------------------------------------------------------------
+  # PORTAL PRINCIPAL
+  # ----------------------------------------------------------------------------
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./homepage/config:/app/config
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # ENTRETENIMIENTO Y NUBE PRIVADA
+  # ----------------------------------------------------------------------------
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - ./jellyfin/config:/config
+      - ./jellyfin/cache:/cache
+      - ./jellyfin/media:/media
+
+  nextcloud-db:
+    image: mariadb:10.11
+    container_name: nextcloud-db
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    volumes:
+      - ./nextcloud/db:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=cambiar_password_root
+      - MYSQL_PASSWORD=cambiar_password_user
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+
+  nextcloud:
+    image: nextcloud:latest
+    container_name: nextcloud
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - nextcloud-db
+    volumes:
+      - ./nextcloud/app:/var/www/html
+    environment:
+      - MYSQL_HOST=nextcloud-db
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MYSQL_PASSWORD=cambiar_password_user
+
+  # ----------------------------------------------------------------------------
+  # RED, VPN Y BLOQUEO DE PUBLICIDAD
+  # ----------------------------------------------------------------------------
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8081:80"
+    environment:
+      - TZ=America/Guayaquil
+      - WEBPASSWORD=admin_pihole_password
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: debian-homeserver
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./tailscale/state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
